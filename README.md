@@ -8,7 +8,7 @@ Octave/MATLAB bindings, and a standalone benchmark suite comparing against
 Hypre BoomerAMG, AMGCL, RCHOL/pRCHOL, ParAC, CMG, and Laplacians.jl.
 
 The library is the header tree under `include/apxchol/` (namespace
-`apxchol::`) plus two compiled translation units in `src/` (CUDA builds add
+`apxchol::`) plus three compiled translation units in `src/` (CUDA builds add
 two device TUs); `python/` and
 `octave/` are self-contained bindings, `examples/` demonstrates the public
 customization seams, and `benchmarks/` is a standalone comparison suite with
@@ -39,6 +39,22 @@ ctest --test-dir build --output-on-failure
 ./build/apxchol data/matrices/ecology1.mtx --rhs your_rhs.mtx  # MatrixMarket vector of length n
 ```
 
+On macOS, install Eigen and the OpenMP runtime with Homebrew before
+configuring:
+
+```bash
+brew install cmake eigen libomp
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j"$(sysctl -n hw.ncpu)"
+ctest --test-dir build --output-on-failure
+```
+
+CMake finds Homebrew `libomp` for Apple Clang. Use
+`-DAPXCHOL_ENABLE_OPENMP=OFF` for a serial build. Embedders that already ship
+an OpenMP runtime can set `APXCHOL_OPENMP_INCLUDE_DIR` and
+`APXCHOL_OPENMP_LIBRARY` so apxchol uses the same runtime instead of loading a
+second copy into the process.
+
 Useful CLI knobs: `--tol`, `--maxiter`, `--is {block_greedy|luby|baumann_kyng|rootset}`,
 `--graph-storage {vec|forward_star|bstr|vec_pool}`,
 `-o solution.mtx`, `--seed`. See `--help` for the full list.
@@ -48,6 +64,11 @@ Useful CLI knobs: `--tol`, `--maxiter`, `--is {block_greedy|luby|baumann_kyng|ro
 The supported C++ consumption path is `add_subdirectory()` / FetchContent
 on this repository, linking the `apxchol_core` target (there are no
 `install()` rules yet).
+
+`include/apxchol/c_api.h` exposes a C ABI for one-shot solves from Julia and
+other foreign-function interfaces. It accepts zero- or one-based 64-bit CSC
+indices and returns solver statistics without allowing C++ exceptions to cross
+the language boundary.
 
 One-shot solve (PCG with the approximate-Cholesky preconditioner):
 
@@ -110,6 +131,10 @@ cuSPARSE and the one-shot `apxchol::solve` uses a fully GPU-resident PCG
 loop applies to the one-shot `apxchol::solve` only; `cpu_solver` on a CUDA
 build runs the host PCG with cuSPARSE triangular solves.
 
+The CUDA backend requires an NVIDIA GPU and is unavailable on macOS. Apple
+Silicon uses the CPU/OpenMP backend. A Metal backend would require a separate
+implementation; the build does not present the CPU path as GPU acceleration.
+
 ### Customizing the solver
 
 Three research seams are public, each with a worked example under
@@ -144,11 +169,17 @@ empirical rationale.
 ## Python package (CPU)
 
 ```bash
-pip install apxchol        # wheels from PyPI (Linux x86_64, Python 3.10-3.14)
+pip install apxchol        # Linux x86_64 and macOS ARM64 wheels, Python 3.10-3.14
 # or build from a checkout: compiles the C++ extension from ../src, installs
 # it editable so python/ changes are picked up without reinstalling:
 pip install -e python
 ```
+
+The macOS wheels require macOS 11 or newer. They bundle LLVM's OpenMP runtime,
+built from source for the wheel deployment target, so installing a wheel does
+not require Homebrew. The source build options described above remain
+available when a host needs to select its own OpenMP runtime or build without
+OpenMP.
 
 ```python
 import numpy as np
@@ -197,7 +228,7 @@ you need `pcg`'s interface.
 
 ## Build options
 
-Compile-time options (`APXCHOL_USE_CUDA`, `APXCHOL_SPTRSV_FP32`,
+Compile-time options (`APXCHOL_USE_CUDA`, `APXCHOL_ENABLE_OPENMP`, `APXCHOL_SPTRSV_FP32`,
 `APXCHOL_POOL_FP32`, `APXCHOL_64BIT_EDGE_INDICES` /
 `APXCHOL_64BIT_NODE_INDICES`, `APXCHOL_BUILD_EXAMPLES` /
 `APXCHOL_BUILD_TESTS` / `APXCHOL_BUILD_TOOLS`) are declared and documented
@@ -206,7 +237,8 @@ lists them with their help strings. `APXCHOL_SPTRSV_FP32` and
 `APXCHOL_POOL_FP32` default ON (fp32 factor values / fp32 residual-pool
 weights; the PCG recurrence stays fp64; pass `=OFF` for an fp64 baseline);
 everything else defaults OFF except the `APXCHOL_BUILD_EXAMPLES` /
-`APXCHOL_BUILD_TESTS` toggles. Release builds add `-march=native`.
+`APXCHOL_BUILD_TESTS` and `APXCHOL_ENABLE_OPENMP` toggles. Release builds add
+`-march=native`.
 
 ## Benchmarks
 

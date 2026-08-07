@@ -19,17 +19,17 @@ A single test or filter:
 
 Tests live in `tests/` (GoogleTest, typed across the storage backends, so one
 `TYPED_TEST` registers several ctest cases). New behaviour needs a test there;
-CI (`.github/workflows/ci.yml`) builds and runs the library, Python and Octave
-suites — its path filters cover the library, tests, bindings, and examples.
+CI (`.github/workflows/ci.yml`) builds and runs the library, Linux and macOS
+Python wheels, and Octave suites — its path filters cover the library, tests,
+bindings, examples, and wheel workflows.
 
 The Python package (`pip install -e python`, `pytest python/tests`) and the
 Octave MEX (`cd octave && ./build.sh`) are separate build systems that compile
-the two core TUs directly — they do not use the root CMake build, so a change to
-`src/` or `include/` should be checked against all three. (Deliberate: the
-wheel build runs in isolated manylinux containers where nothing is installed,
-and the core is two small TUs — compiling them directly is simpler and more
-robust than exporting/consuming a CMake package. Revisit if the TU count
-grows.)
+the factorization and solve TUs directly — they do not use the root CMake
+build, so a change to `src/` or `include/` should be checked against all three.
+(Deliberate: the wheel build runs in isolated manylinux containers where
+nothing is installed, and each binding compiles two small TUs — this is simpler
+than exporting/consuming a CMake package. Revisit if the TU count grows.)
 
 ## Code style
 
@@ -37,9 +37,10 @@ grows.)
   or an equivalent Clang is required).
 - `snake_case` for types, functions, and variables; trailing `_` on private
   members. Namespace is `apxchol::`.
-- The core is header-only under `include/apxchol/` plus two compiled TUs
-  (`src/factorization.cpp`, `src/solve.cpp`; CUDA builds add `src/cuda_cast.cu`
-  and `src/cuda_levelset.cu`). Templates and inline logic belong
+- The core is the header tree under `include/apxchol/` plus three compiled TUs
+  (`src/c_api.cpp`, `src/factorization.cpp`, `src/solve.cpp`; CUDA builds add
+  `src/cuda_cast.cu` and `src/cuda_levelset.cu`). Templates and inline logic
+  belong
   in the headers; the TUs exist to instantiate the runtime-dispatch entry points.
 - Keep the two-axis dispatch consistent: a new independent-set partitioner must
   be appended to `partitioner_list` in `partitioner_list.h`, and a new storage

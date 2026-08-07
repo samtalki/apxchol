@@ -4,22 +4,16 @@ project(apxchol_ext LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+option(APXCHOL_ENABLE_OPENMP "Enable OpenMP parallelism when a runtime is available" ON)
 
 # Repo root (this CMakeLists lives in python/).
 set(APX_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 # ── Eigen (system or fetched, mirrors root) ──
-find_package(Eigen3 3.3 CONFIG QUIET)
-if (NOT Eigen3_FOUND)
-    include(FetchContent)
-    FetchContent_Declare(eigen
-        GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-        GIT_TAG        3.4.0
-        GIT_SHALLOW    TRUE)
-    FetchContent_MakeAvailable(eigen)
-endif()
+include(${APX_ROOT}/cmake/ApxCholEigen.cmake)
+apxchol_find_or_fetch_eigen()
 
-find_package(OpenMP)
+set(PYBIND11_FINDPYTHON ON)
 find_package(pybind11 CONFIG REQUIRED)
 # The two core TUs depend only on Eigen + OpenMP (no fast_matrix_market, no
 # generated version.h, no CLI11/spdlog), so we compile them straight into the
@@ -31,9 +25,8 @@ pybind11_add_module(_apxchol
 )
 target_include_directories(_apxchol PRIVATE ${APX_ROOT}/include)
 target_link_libraries(_apxchol PRIVATE Eigen3::Eigen)
-if (OpenMP_CXX_FOUND)
-    target_link_libraries(_apxchol PRIVATE OpenMP::OpenMP_CXX)
-endif()
+include(${APX_ROOT}/cmake/ApxCholOpenMP.cmake)
+apxchol_enable_openmp(_apxchol PRIVATE)
 
 # Match the root library defaults (both ON by default there).
 target_compile_definitions(_apxchol PRIVATE APXCHOL_SPTRSV_FP32 APXCHOL_POOL_FP32)

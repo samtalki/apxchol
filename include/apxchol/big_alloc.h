@@ -3,8 +3,9 @@
 /// large allocations. Adapted from cp-algo (Oleksandr Kulkov's CP library):
 /// https://lib.cp-algorithms.com/cp-algo/util/big_alloc.hpp
 ///
-/// For allocations >= 1 MB:
+/// For allocations >= 1 MB on supported Unix systems:
 ///   - mmap with MAP_PRIVATE | MAP_ANONYMOUS
+/// On Linux:
 ///   - madvise MADV_HUGEPAGE: ask kernel to back with 2 MB pages (THP)
 ///   - madvise MADV_POPULATE_WRITE: pre-fault all pages so no per-page minor
 ///     faults during use
@@ -17,14 +18,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <new>
 #include <sys/mman.h>
 
 // Linux 5.14 uapi constant; absent from older glibc headers (e.g. the
-// manylinux_2_28 wheel-build image, glibc 2.28). Define the raw value and let
-// pre-5.14 kernels return EINVAL — the madvise calls below are best-effort
-// advice and their return values are deliberately ignored.
-#ifndef MADV_POPULATE_WRITE
+// manylinux_2_28 wheel-build image, glibc 2.28). Define the raw value on Linux
+// only and let pre-5.14 kernels return EINVAL. Other Unix kernels still use the
+// mmap path, without Linux-specific advice.
+#if defined(__linux__) && !defined(MADV_POPULATE_WRITE)
 #define MADV_POPULATE_WRITE 23
 #endif
 
@@ -45,7 +47,12 @@ public:
     big_alloc() = default;
     template <class U> big_alloc(const big_alloc<U, Align>&) noexcept {}
 
+    static constexpr std::size_t max_size() noexcept {
+        return (std::numeric_limits<std::size_t>::max() - 4095) / sizeof(T);
+    }
+
     [[nodiscard]] T* allocate(std::size_t n) {
+        if (n > max_size()) throw std::bad_array_new_length{};
         std::size_t padded = round_up(n * sizeof(T));
         std::size_t align  = std::max<std::size_t>(alignof(T), Align);
         if (padded >= MEGABYTE) {
@@ -53,8 +60,12 @@ public:
                              PROT_READ | PROT_WRITE,
                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
             if (raw == MAP_FAILED) throw std::bad_alloc{};
+#ifdef MADV_HUGEPAGE
             madvise(raw, padded, MADV_HUGEPAGE);
+#endif
+#ifdef MADV_POPULATE_WRITE
             madvise(raw, padded, MADV_POPULATE_WRITE);
+#endif
             return static_cast<T*>(raw);
         }
         return static_cast<T*>(::operator new(padded, std::align_val_t(align)));
@@ -65,7 +76,7 @@ public:
         std::size_t padded = round_up(n * sizeof(T));
         if (padded >= MEGABYTE) { munmap(p, padded); return; }
         std::size_t align = std::max<std::size_t>(alignof(T), Align);
-        ::operator delete(p, padded, std::align_val_t(align));
+        ::operator delete(p, std::align_val_t(align));
     }
 
     bool operator==(const big_alloc&) const noexcept { return true; }

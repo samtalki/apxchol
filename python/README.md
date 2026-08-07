@@ -6,7 +6,9 @@ Approximate-Cholesky preconditioner for graph-Laplacian / SDDM linear systems.
 pip install apxchol
 ```
 
-Prebuilt wheels: Linux x86_64 (manylinux), CPython 3.10–3.14. CPU only.
+Prebuilt wheels: Linux x86_64 (manylinux) and macOS ARM64, CPython 3.10–3.14.
+CPU only. The macOS wheels require macOS 11 or newer and bundle LLVM's OpenMP
+runtime; installing them does not require Homebrew.
 The wheels are built with 32-bit indices: inputs (and factors) beyond ~2.1e9
 nonzeros are unsupported — build from source with
 `-DAPXCHOL_64BIT_EDGE_INDICES=ON` for larger problems.
@@ -112,16 +114,26 @@ internal scratch buffers. Use one `Solver` per thread, or serialize calls
 
 BSD 4-Clause (the original "BSD with advertising clause" license) —
 see `LICENSE`. Copyright (c) 2026 ETH Zürich and the apxchol contributors.
+The macOS wheels also include LLVM OpenMP under Apache 2.0 with the LLVM
+exception; see `LICENSE.libomp.txt` in the wheel metadata.
 
 ## From source
 
-The wheel build compiles the library's two core translation units directly;
+The wheel build compiles the library's factorization and solve translation
+units directly;
 building from a repository checkout works the same way:
 
 ```bash
 pip install -e python          # from the repository root
 pytest python/tests -v
 ```
+
+On macOS, install `libomp` first (`brew install libomp`) for an OpenMP source
+build. The source build finds the Homebrew runtime automatically. Set
+`CMAKE_ARGS` to
+`-DAPXCHOL_ENABLE_OPENMP=OFF` for a serial extension, or supply
+`APXCHOL_OPENMP_INCLUDE_DIR` and `APXCHOL_OPENMP_LIBRARY` through
+`CMAKE_ARGS` when embedding Python in a process that already provides OpenMP.
 
 Source builds use `-O3 -march=native` (the distributed wheels are built
 portable). If your environment requires `--no-build-isolation`, first

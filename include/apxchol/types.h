@@ -33,6 +33,8 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "apxchol/omp_compat.h"
+
 // A 64-bit node index forces 64-bit edges; the legacy macro maps to the edge knob.
 #if defined(APXCHOL_64BIT_NODE_INDICES) && !defined(APXCHOL_64BIT_EDGE_INDICES)
 #  define APXCHOL_64BIT_EDGE_INDICES

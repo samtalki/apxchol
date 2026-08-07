@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(apxchol VERSION 0.2.2 LANGUAGES CXX)
+project(apxchol VERSION 0.2.2 LANGUAGES C CXX)
 
 if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -24,15 +24,8 @@ endif()
 
 include(FetchContent)
 # ── Eigen ────────────────────────────────────────────
-find_package(Eigen3 3.3 CONFIG QUIET)
-if (NOT Eigen3_FOUND)
-    FetchContent_Declare(eigen
-        GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-        GIT_TAG        3.4.0
-        GIT_SHALLOW    TRUE
-    )
-    FetchContent_MakeAvailable(eigen)
-endif()
+include(cmake/ApxCholEigen.cmake)
+apxchol_find_or_fetch_eigen()
 
 # ── CLI11 ────────────────────────────────────────────
 FetchContent_Declare(cli11
@@ -62,11 +55,9 @@ FetchContent_Declare(fast_matrix_market
 )
 FetchContent_MakeAvailable(fast_matrix_market)
 
-# ── OpenMP (optional) ────────────────────────────────
-find_package(OpenMP)
-
 # ── Build options ───────────────────────────────────
 option(APXCHOL_USE_CUDA "Use cuSPARSE (GPU) for sparse triangular solve" OFF)
+option(APXCHOL_ENABLE_OPENMP "Enable OpenMP parallelism when a runtime is available" ON)
 option(APXCHOL_64BIT_EDGE_INDICES "64-bit edge/offset indices, for factors with more than 2^31 nonzeros" OFF)
 option(APXCHOL_64BIT_NODE_INDICES "64-bit vertex indices (implies 64-bit edge indices)" OFF)
 option(APXCHOL_64BIT_INDICES "Deprecated alias for APXCHOL_64BIT_EDGE_INDICES" OFF)
@@ -79,6 +70,13 @@ option(APXCHOL_BUILD_TOOLS "Build the developer analysis tools (bench_setup, ana
 if (APXCHOL_64BIT_INDICES)
     message(DEPRECATION "APXCHOL_64BIT_INDICES is deprecated; use APXCHOL_64BIT_EDGE_INDICES")
     set(APXCHOL_64BIT_EDGE_INDICES ON)
+endif()
+
+if (APXCHOL_USE_CUDA AND APPLE)
+    message(FATAL_ERROR
+        "APXCHOL_USE_CUDA requires NVIDIA CUDA, which is unavailable on macOS. "
+        "Apple Silicon currently uses the CPU/OpenMP backend; a Metal backend "
+        "would require a separate implementation.")
 endif()
 
 if (APXCHOL_USE_CUDA)
@@ -112,6 +110,7 @@ configure_file(
 
 # ── Core library: ApxChol preconditioner ─────────────
 add_library(apxchol_core
+    src/c_api.cpp
     src/factorization.cpp
     src/solve.cpp
     # Device precision-cast kernels for the mixed-precision GPU SpTRSV. Compiled
@@ -126,9 +125,8 @@ add_library(apxchol_core
 # is file I/O used solely by the CLI and analyze_factor — linked on those
 # targets, not here.
 target_link_libraries(apxchol_core PUBLIC Eigen3::Eigen)
-if (OpenMP_CXX_FOUND)
-    target_link_libraries(apxchol_core PUBLIC OpenMP::OpenMP_CXX)
-endif()
+include(cmake/ApxCholOpenMP.cmake)
+apxchol_enable_openmp(apxchol_core PUBLIC)
 target_include_directories(apxchol_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_BINARY_DIR}/include

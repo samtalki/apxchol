@@ -1,5 +1,9 @@
 include(FetchContent)
 
+add_executable(c_header_test test_c_header.c)
+target_include_directories(c_header_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME CApi.CHeaderCompiles COMMAND c_header_test)
+
 FetchContent_Declare(
         googletest
         GIT_REPOSITORY https://github.com/google/googletest.git
@@ -11,6 +15,7 @@ FetchContent_MakeAvailable(googletest)
 
 add_executable(unit_tests
         test_core.cpp
+        test_c_api.cpp
         test_factorize.cpp
         test_elimination.cpp
         test_custom_hooks.cpp

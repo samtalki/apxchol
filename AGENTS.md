@@ -26,13 +26,14 @@ ctest --test-dir build --output-on-failure
 
 Build options (root `CMakeLists.txt`):
 - `-DAPXCHOL_USE_CUDA=ON` — switch the SpTRSV backend from OpenMP level-sets to cuSPARSE (+ GPU-resident PCG). Defines `APXCHOL_USE_CUDA`, requires CUDAToolkit.
+- `-DAPXCHOL_ENABLE_OPENMP=OFF` — build a serial CPU runtime. It defaults ON. Apple Clang uses Homebrew `libomp` when available. Embedders can select an existing runtime with `APXCHOL_OPENMP_INCLUDE_DIR` and `APXCHOL_OPENMP_LIBRARY`; use this for Julia and other hosts that already load OpenMP.
 - `-DAPXCHOL_64BIT_EDGE_INDICES=ON` — 64-bit `edge_index` (cumulative offsets/edge ids) for factors with > 2³¹ nnz, e.g. com-Orkut. `-DAPXCHOL_64BIT_NODE_INDICES=ON` additionally widens vertex ids (implies 64-bit edges). The old `APXCHOL_64BIT_INDICES` is a deprecated alias for the EDGE knob. See `include/apxchol/types.h`.
 - `APXCHOL_SPTRSV_FP32` / `APXCHOL_POOL_FP32` — both **ON by default** (fp32 factor values in the SpTRSV / fp32 residual-pool weights); pass `=OFF` for an fp64 baseline.
 - `APXCHOL_BUILD_EXAMPLES` / `APXCHOL_BUILD_TESTS` — both ON by default; `APXCHOL_BUILD_TESTS` gates the GoogleTest fetch. `APXCHOL_BUILD_TOOLS` — OFF by default; builds the `bench_setup` / `analyze_factor` dev tools.
 
 The project targets **C++23** (`CMAKE_CXX_STANDARD 23`) and adds `-march=native` in Release/RelWithDebInfo.
 
-The Python package under `python/` is its own scikit-build-core project (`pip install -e python`); it compiles the two core TUs directly and never touches the root build.
+The Python package under `python/` is its own scikit-build-core project (`pip install -e python`); it compiles the two core TUs directly and never touches the root build. cibuildwheel produces Linux x86_64 and macOS ARM64 wheels; the macOS build compiles LLVM OpenMP from source for a macOS 11 deployment target and bundles it during cibuildwheel's standard delocate step.
 
 Benchmarks live in a separate CMake project; see `benchmarks/README.md` for the runner pipeline. The single fair sweep is `benchmarks/sweep_fair.py` (grids + SuiteSparse + IPM; `--device cpu|gpu` covers both axes and runs ParAC in-process via `parac_runner.py`; `--parac-only`/`--no-parac` scope it). Shared harness (hardened `sh`, matrix registry, cell store, VRAM sidecar) is `runner_common.py`. `fair_charts.py` + `combined_charts.py` + `gpu_charts.py` render the committed `benchmarks/latest/` charts. Build the driver with `cmake -B benchmarks/build -S benchmarks -DCMAKE_BUILD_TYPE=Release && cmake --build benchmarks/build -j$(nproc) benchmark` (CUDA axis: `-B benchmarks/build-cuda` with the CUDA flags).
 
@@ -40,7 +41,7 @@ Benchmarks live in a separate CMake project; see `benchmarks/README.md` for the 
 
 ### Library layout
 
-The public surface is the header tree under `include/apxchol/` plus two compiled TUs (`src/factorization.cpp`, `src/solve.cpp`) that form `apxchol_core`. The convenience header is `include/apxchol.h`. Subdirectories:
+The public surface is the header tree under `include/apxchol/` plus three compiled TUs (`src/factorization.cpp`, `src/solve.cpp`, `src/c_api.cpp`) that form `apxchol_core`. The convenience C++ header is `include/apxchol.h`; `include/apxchol/c_api.h` is the exception-safe one-shot C ABI used by foreign-function interfaces. Subdirectories:
 
 - `apxchol/graph/` — graph data structure templated on an `incidence_storage` concept. Implementations: `vec` (std::vector), `forward_star` (linked-list pool), `bstr` (bit-string), `vec_pool` (slab pool — the most robust backend in the suite, the only one that does not collapse on high-degree IPM matrices, and the `apxchol::solve` default). `graph_storage` enum (in `types.h`) picks one at runtime via `make_graph<...>`.
 - `apxchol/solver/` — factorization and PCG glue.

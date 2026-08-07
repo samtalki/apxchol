@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <random>
 #include <vector>
 
@@ -8,6 +10,14 @@
 
 #include "apxchol/graph/conversions.h"
 #include "apxchol/graph/graph.h"
+#include "apxchol/big_alloc.h"
+
+TEST(BigAlloc, RejectsOverflowingElementCount) {
+    apxchol::util::big_alloc<std::uint64_t> allocator;
+    EXPECT_THROW(
+        allocator.allocate(std::numeric_limits<std::size_t>::max()),
+        std::bad_array_new_length);
+}
 
 // ── Typed test fixture ───────────────────────────────
 

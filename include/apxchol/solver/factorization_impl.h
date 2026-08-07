@@ -573,7 +573,7 @@ factorization factorize_impl(const Eliminator& elim,
 
     // Active vertex list (natural index order) — filtered in-place each round.
     std::vector<node_index> active(n);
-    std::ranges::iota(active, node_index{0});
+    std::iota(active.begin(), active.end(), node_index{0});
 
     // The partitioner's view of the run-constant services, the shared
     // selection structure, and the degree-prepass scratch (all owned here).
