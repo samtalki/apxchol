@@ -2,7 +2,8 @@
 
 Parallel approximate-Cholesky preconditioning and PCG for sparse Laplacian
 and SDDM systems. CPU setup and solve use OpenMP; CUDA provides an optional
-GPU-resident solve. C++, Python and Octave/MATLAB interfaces are included.
+GPU-resident solve and Metal an optional Apple-GPU block solve. C++, C, Python
+and Octave/MATLAB interfaces are included.
 
 ## Build and run
 
@@ -17,6 +18,10 @@ ctest --test-dir build --output-on-failure
 ./build/apxchol matrix.mtx --random-rhs --tol 1e-8
 ./build/apxchol matrix.mtx --rhs rhs.mtx -o solution.mtx
 ```
+
+On macOS, install the OpenMP runtime first (`brew install libomp`); Apple
+Clang finds the Homebrew keg automatically, or pass `-DOpenMP_ROOT=<prefix>`.
+Without a runtime the build is serial and CMake warns.
 
 The CLI requires an explicit RHS or `--random-rhs`. It reports whether input
 is an assembled operator or adjacency matrix, forming `L = D - A` for the
@@ -37,6 +42,30 @@ Eigen::VectorXd z = solver.apply(r);
 `apxchol::apx_cholesky` provides Eigen's preconditioner interface. Singular
 Laplacians use their compatible subspace; SDDM operators retain a full factor.
 
+The `apxchol_c` target provides an exception-safe C ABI
+([`c_api.h`](include/apxchol/c_api.h)) over `cpu_solver` for other languages:
+opaque solver handles with create/solve/solve-block/apply/stats/factor export,
+versioned option structs and explicit statuses.
+
+```c
+apxchol_options opt;
+apxchol_options_default(&opt, sizeof opt);
+apxchol_solver* s;
+apxchol_solver_create(n, colptr, rowval, nzval, /*index_base=*/0, &opt, &s, err, sizeof err);
+apxchol_solver_solve(s, b, NULL, x, -1.0, -1, &info, err, sizeof err);
+apxchol_solver_destroy(s);
+```
+
+With `-DAPXCHOL_USE_METAL=ON` (macOS), `apxchol::metal_solver` solves up to 64
+right-hand sides in lockstep on the Apple GPU, with double-float recurrences
+and the CPU's factor; it is also the C ABI's `APXCHOL_BACKEND_METAL`. Default
+solves are unchanged. See [precision and storage](docs/precision.md).
+
+```cpp
+apxchol::metal_solver gpu(L);              // host factorization, GPU solves
+auto block = gpu.solve(B, 1e-10);          // B: n x k, per-column results
+```
+
 ```bash
 pip install apxchol                 # or: pip install -e python
 ```
@@ -55,6 +84,7 @@ or `apxchol_laplacian(Adj)` in Octave for adjacency input. See the
 | CMake option | Purpose |
 |---|---|
 | `APXCHOL_USE_CUDA=ON` | Dataflow triangular solve and GPU PCG; core links only `cudart` |
+| `APXCHOL_USE_METAL=ON` | Apple-GPU block PCG (`metal_solver`); macOS only, exclusive with CUDA |
 | `APXCHOL_POOL_FP32=OFF` | fp64 residual-pool weights instead of default fp32 |
 | `APXCHOL_64BIT_EDGE_INDICES=ON` | Wide factor/pool offsets |
 | `APXCHOL_64BIT_NODE_INDICES=ON` | Wide vertices and offsets |
