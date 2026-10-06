@@ -117,3 +117,25 @@ Historical rejected precision variants and their limits are recorded in
 [implementation history](implementation-history.md). They are not universal
 precision guarantees. The [benchmark protocol](../benchmarks/README.md) describes
 how to compare supported configurations without changing timing boundaries.
+
+## C API CPU exit certification
+
+The C ABI recomputes the final original-system residual with the CPU solver's
+owned operator, after any solution centering. The diagnostic forced-inexact-fp32
+operator override retains an additional lossless operator copy for this check;
+ordinary lossless fp32/fp64 configurations retain only one copy. Norms use scaling rather than
+unscaled sums of squares. The original RHS copy is retained until certification,
+including when the output aliases the caller's RHS or initial guess.
+`SUCCESS` requires the resulting relative residual to be strictly below the
+requested tolerance. Zero RHS returns residual zero only for a zero residual;
+non-finite exit arithmetic reports infinity and `NOT_CONVERGED`.
+
+Certification is included in `solve_seconds`, adds no PCG iterations or retries,
+and applies independently to every CPU block column. C++ solve methods retain
+their existing recursive residual reporting and stopping rule. In particular,
+this check prevents false acceptance of tiny inputs but does not make the
+underlying PCG recurrence scale-invariant. Metal retains its separately
+documented residual calculation and attainable-accuracy limitations above.
+Its host norms are unscaled: the C ABI rejects finite nonzero RHS/guess
+vectors whose squared norm underflows to zero or overflows with `UNSUPPORTED`.
+The direct C++ Metal API still has this extreme-scale limitation.

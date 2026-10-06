@@ -20,7 +20,9 @@
  *
  * Input: a square CSC matrix with int64 colptr[n+1] and rowval/nzval[nnz],
  * nnz = colptr[n] - index_base, index_base 0 or 1 for both index arrays. Rows
- * may be unsorted; duplicates are summed. The matrix must satisfy the
+ * may be unsorted; duplicates are summed. The caller must supply live buffers
+ * of at least the documented lengths; this ABI cannot discover allocation
+ * sizes or validate arbitrary pointers. Inputs must not be mutated during a call. The matrix must satisfy the
  * operator contract of apxchol/operator_class.h (Laplacian, SDDM or a
  * lumpable M-matrix); it is validated, never reinterpreted. Limits in every
  * build: n <= 2^31-1 and nnz <= 2^31-1.
@@ -117,8 +119,8 @@ typedef struct apxchol_solve_info {
     uint32_t struct_size;
     int32_t converged;                /* 1 iff relative_residual < tol */
     int64_t iterations;
-    double relative_residual;         /* at exit: CPU the PCG recursion's; METAL
-                                         ||b - A x|| / ||b|| recomputed in fp64 */
+    double relative_residual;         /* ||b - A x|| / ||b|| at exit, recomputed
+                                         in fp64; CPU uses scaled norms */
     double solve_seconds;
 } apxchol_solve_info;
 
@@ -161,7 +163,13 @@ APXCHOL_C_API apxchol_status apxchol_solver_create(
 APXCHOL_C_API void apxchol_solver_destroy(apxchol_solver* solver); /* NULL is a no-op */
 
 /* One right-hand side. tol < 0 / max_iter < 0 select the handle's options;
- * x0 NULL starts from zero. info is nullable. */
+ * x0 NULL starts from zero. info is nullable. CPU certification uses the
+ * original operator and scaled norms after the final iterate is written;
+ * its cost is included in solve_seconds. It adds no iterations or retries.
+ * A zero RHS has residual 0 only when b-A*x is zero, otherwise infinity.
+ * Non-finite CPU exit arithmetic reports infinity and NOT_CONVERGED.
+ * METAL rejects nonzero RHS/guess vectors whose unscaled squared norm
+ * underflows to zero or overflows (UNSUPPORTED), before solving. */
 APXCHOL_C_API apxchol_status apxchol_solver_solve(
     apxchol_solver* solver, const double* b, const double* x0, double* x,
     double tol, int32_t max_iter, apxchol_solve_info* info,

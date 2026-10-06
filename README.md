@@ -46,15 +46,25 @@ The `apxchol_c` target provides an exception-safe C ABI
 ([`c_api.h`](include/apxchol/c_api.h)) over `cpu_solver` for other languages:
 opaque solver handles with create/solve/solve-block/apply/stats/factor export,
 factor handles that solvers adopt (one factor reused for a nearby operator of
-the same size), versioned option structs and explicit statuses.
+the same size), versioned option structs and explicit statuses. CPU C calls certify the final
+original-system residual with scaled fp64 norms, including that check in solve
+time; C++ PCG stopping semantics are unchanged. Caller-provided buffers must
+remain valid and have the lengths documented in the header. Native overflow
+abort paths and exceptions escaping OpenMP regions are not recoverable statuses.
 
 ```c
 apxchol_options opt;
-apxchol_options_default(&opt, sizeof opt);
-apxchol_solver* s;
-apxchol_solver_create(n, colptr, rowval, nzval, /*index_base=*/0, &opt, &s, err, sizeof err);
-apxchol_solver_solve(s, b, NULL, x, -1.0, -1, &info, err, sizeof err);
+if (apxchol_options_default(&opt, sizeof opt) != APXCHOL_STATUS_SUCCESS) return 1;
+apxchol_solver* s = NULL;
+char err[1024];
+apxchol_solve_info info = {0};
+info.struct_size = sizeof info;
+if (apxchol_solver_create(n, colptr, rowval, nzval, 0, &opt, &s, err, sizeof err)
+    != APXCHOL_STATUS_SUCCESS) return 1;
+apxchol_status status = apxchol_solver_solve(s, b, NULL, x, -1.0, -1,
+                                            &info, err, sizeof err);
 apxchol_solver_destroy(s);
+if (status != APXCHOL_STATUS_SUCCESS) return 1; // includes NOT_CONVERGED
 ```
 
 With `-DAPXCHOL_USE_METAL=ON` (macOS), `apxchol::metal_solver` solves up to 64

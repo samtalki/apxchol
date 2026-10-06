@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #ifdef _OPENMP
@@ -613,7 +614,14 @@ void cpu_solver::build_operator(const Eigen::SparseMatrix<double>& L,
         // path has no cast or transient fp64 matrix at all.
         if (fallback_needs_fp32_cast) {
             Lrm_f_ = Lrm_.cast<float>();
-            Eigen::SparseMatrix<double, Eigen::RowMajor>().swap(Lrm_);
+            if (storage.fp32_exact)
+                Eigen::SparseMatrix<double, Eigen::RowMajor>().swap(Lrm_);
+        } else if (op_fp32_ && !storage.fp32_exact) {
+            // The diagnostic forced-fp32 override may narrow the solve's
+            // operator. Retain the lossless copy only in that case, so exit
+            // certification still measures the defining operator.
+            if (!copy_symmetric_csc_as_owned_csr(Lcsc, Lrm_, storage.inner_indices_sorted))
+                throw std::logic_error("lossless operator copy disagrees with fp32 copy");
         }
     }
 
@@ -649,6 +657,51 @@ void cpu_solver::build_operator(const Eigen::SparseMatrix<double>& L,
             N, N * 8.0 * 6 * MB,
             proc_kb("VmRSS:") / 1024.0, proc_kb("VmHWM:") / 1024.0);
     }
+}
+
+Eigen::VectorXd cpu_solver::apply(const Eigen::VectorXd& r) const {
+    Eigen::VectorXd z(n_);
+    apply(r, z);
+    return z;
+}
+
+void cpu_solver::apply(const Eigen::VectorXd& r, Eigen::Ref<Eigen::VectorXd> z) const {
+    if (r.size() != n_ || z.size() != n_)
+        throw std::invalid_argument("cpu_solver::apply: vector length mismatch");
+    if (r.data() == z.data())
+        throw std::invalid_argument("cpu_solver::apply: input and output must be disjoint");
+    precond_._solve_impl(r, z);
+}
+
+double cpu_solver::relative_residual(Eigen::Ref<const Eigen::VectorXd> b,
+                                      Eigen::Ref<const Eigen::VectorXd> x) const {
+    if (b.size() != n_ || x.size() != n_)
+        throw std::invalid_argument("cpu_solver::relative_residual: vector length mismatch");
+    const double infinity = std::numeric_limits<double>::infinity();
+    if (!b.allFinite() || !x.allFinite()) return infinity;
+    Ap_.resize(n_);
+    const auto need = detail::part_capacity();
+    if (part_.size() < need) part_.resize(need);
+    if (op_fp32_ && Lrm_.rows() == 0)
+        (void)parallel_spmv_csr(Lrm_f_, x.data(), Ap_.data(), part_.data());
+    else          (void)parallel_spmv_csr(Lrm_, x.data(), Ap_.data(), part_.data());
+    Ap_ = b - Ap_;
+    if (!Ap_.allFinite()) return infinity;
+    const double bs = b.cwiseAbs().maxCoeff();
+    const double rs = Ap_.cwiseAbs().maxCoeff();
+    if (rs == 0.0) return 0.0;
+    if (bs == 0.0) return infinity;
+    // Neither squaring tiny inputs nor forming an overflowing norm is needed.
+    // Separate exponents also avoid overflow in rs/bs before the norm ratio.
+    double bn = 0.0, rn = 0.0;
+    for (Eigen::Index i = 0; i < n_; ++i) {
+        const double bv = b[i] / bs, rv = Ap_[i] / rs;
+        bn += bv * bv;
+        rn += rv * rv;
+    }
+    int be, re;
+    const double bm = std::frexp(bs, &be), rm = std::frexp(rs, &re);
+    return std::scalbn((rm / bm) * std::sqrt(rn / bn), re - be);
 }
 
 void cpu_solver::solve_impl(const Eigen::VectorXd& b, Eigen::Ref<Eigen::VectorXd> x,

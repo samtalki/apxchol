@@ -299,6 +299,18 @@ void load_vector(const double* source, Eigen::Index n, Eigen::VectorXd& target,
     }
 }
 
+#if defined(APXCHOL_USE_METAL)
+// Metal's host norm reductions are presently unscaled. Reject finite inputs
+// whose norm cannot be represented there, rather than misclassifying a tiny
+// nonzero RHS as zero or accepting a residual divided by infinity.
+void require_metal_norm(Eigen::Ref<const Eigen::VectorXd> v, const char* what) {
+    const double squared = v.squaredNorm();
+    if (!std::isfinite(squared) || (squared == 0.0 && !v.isZero(0.0)))
+        fail(APXCHOL_STATUS_UNSUPPORTED,
+             std::string(what) + " norm is outside the Metal host reduction range");
+}
+#endif
+
 /// The factorization's own SDDM test (make_graph in graph/conversions.h): a
 /// column whose diagonal exceeds its off-diagonal weight by more than 1e-12
 /// of the diagonal, summed in the same order.
@@ -432,6 +444,8 @@ struct apxchol_solver {
         Eigen::Map<Eigen::VectorXd> out(x, n);
 #if defined(APXCHOL_USE_METAL)
         if (metal) {
+            require_metal_norm(b_buffer, "b");
+            if (x0 != nullptr) require_metal_norm(x0_buffer, "x0");
             apxchol::solve_result r =
                 metal->solve(b_buffer, tol, max_iter, x0 != nullptr ? &x0_buffer : nullptr);
             out = r.x;
@@ -439,14 +453,17 @@ struct apxchol_solver {
             return r;
         }
 #endif
-        return cpu->solve(b_buffer, out, tol, max_iter, x0 != nullptr ? &x0_buffer : nullptr);
+        auto result = cpu->solve(b_buffer, out, tol, max_iter,
+                                 x0 != nullptr ? &x0_buffer : nullptr);
+        result.residual = cpu->relative_residual(b_buffer, out);
+        return result;
     }
 
-    Eigen::VectorXd apply(const Eigen::VectorXd& r) const {
+    void apply(const Eigen::VectorXd& r, Eigen::Ref<Eigen::VectorXd> z) const {
 #if defined(APXCHOL_USE_METAL)
-        if (metal) return metal->apply(r);
+        if (metal) { z = metal->apply(r); return; }
 #endif
-        return cpu->apply(r);
+        cpu->apply(r, z);
     }
 };
 
@@ -614,7 +631,9 @@ apxchol_status apxchol_solver_solve_block(apxchol_solver* solver, int64_t k, con
         require(k >= 0, "k must be non-negative");
         if (k == 0) return APXCHOL_STATUS_SUCCESS;
         require(b != nullptr && x != nullptr, "b or x is NULL");
-        require(k <= std::numeric_limits<int64_t>::max() / solver->n, "n*k overflows");
+        require(k <= std::numeric_limits<std::ptrdiff_t>::max() /
+                         static_cast<std::ptrdiff_t>(sizeof(double)) / solver->n,
+                "n*k*sizeof(double) exceeds addressable buffer size");
         check_call_tolerances(tol, max_iter);
         const double t = solver->tol_for(tol);
         const int mi = solver->max_iter_for(max_iter);
@@ -632,6 +651,10 @@ apxchol_status apxchol_solver_solve_block(apxchol_solver* solver, int64_t k, con
             if (x0 != nullptr) {
                 X0c = Eigen::Map<const Eigen::MatrixXd>(x0, n, k);
                 if (!X0c.allFinite()) fail(APXCHOL_STATUS_INVALID_ARGUMENT, "x0 contains a non-finite value");
+            }
+            for (Eigen::Index c = 0; c < k; ++c) {
+                require_metal_norm(Bc.col(c), "b");
+                if (x0 != nullptr) require_metal_norm(X0c.col(c), "x0");
             }
             const apxchol::metal_solver::block_cref X0r(X0c);
             Eigen::Map<Eigen::MatrixXd> Xm(x, n, k);
@@ -676,7 +699,8 @@ apxchol_status apxchol_solver_apply(apxchol_solver* solver, const double* r, dou
         require(solver != nullptr && r != nullptr && z != nullptr, "solver, r or z is NULL");
         const thread_scope scope(solver->options.threads);
         load_vector(r, solver->n, solver->b_buffer, "r");
-        Eigen::Map<Eigen::VectorXd>(z, solver->n) = solver->apply(solver->b_buffer);
+        Eigen::Map<Eigen::VectorXd> out(z, solver->n);
+        solver->apply(solver->b_buffer, out);
         return APXCHOL_STATUS_SUCCESS;
     });
 }

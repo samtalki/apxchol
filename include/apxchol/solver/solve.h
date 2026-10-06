@@ -104,7 +104,18 @@ public:
                        const Eigen::VectorXd* x0 = nullptr) const;
 
     /// One preconditioner application: z = M^{-1} r (forward+back SpTRSV).
-    Eigen::VectorXd apply(const Eigen::VectorXd& r) const { return precond_.solve(r); }
+    Eigen::VectorXd apply(const Eigen::VectorXd& r) const;
+    /// Caller-owned output; r and z must be disjoint, contiguous n-vectors.
+    /// Reuses preconditioner scratch, including the existing centering counter.
+    void apply(const Eigen::VectorXd& r, Eigen::Ref<Eigen::VectorXd> z) const;
+
+    /// Recompute ||b - A*x|| / ||b|| using the owned original operator and
+    /// fp64 arithmetic with scaled norms. Zero b returns 0 only for zero
+    /// residual, otherwise infinity. Non-finite arithmetic returns infinity.
+    /// Uses shared scratch: must not overlap another call on this solver.
+    /// This does not change the C++ solve methods' recursive stopping rule.
+    double relative_residual(Eigen::Ref<const Eigen::VectorXd> b,
+                             Eigen::Ref<const Eigen::VectorXd> x) const;
 
     const apx_cholesky& preconditioner() const { return precond_; }
     Eigen::Index rows() const { return n_; }
@@ -128,8 +139,9 @@ private:
     // Per-thread partial sums of the fused PCG kernels' deterministic
     // reductions (one cache line per thread; sized to the max team on use).
     mutable std::vector<double> part_;
-    // Owned row-major FULL symmetric operator for the parallel SpMV; exactly
+    // Owned row-major FULL symmetric operator for the parallel SpMV; normally
     // one is populated (fp32 when every value round-trips float losslessly).
+    // Forced inexact fp32 retains Lrm_ for original-system certification.
     // These cannot map constructor input: a reusable solver may outlive it.
     Eigen::SparseMatrix<double, Eigen::RowMajor> Lrm_;
     Eigen::SparseMatrix<float, Eigen::RowMajor>  Lrm_f_;

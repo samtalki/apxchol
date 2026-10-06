@@ -174,7 +174,11 @@ Without it, ordinary tests do not establish leak freedom. Device-wide
   with CUDA) are the exception-safe C ABI over `cpu_solver` for Julia/Rust and
   other non-C++ consumers. Structs carry `struct_size`; defaults come from
   `solve_options{}`; NOT_CONVERGED writes outputs and is never an acceptance;
-  `converged` is `residual < tol` as in the PCG loop. `threads` scopes the
+  `converged` is the strict original-system `residual < tol` exit check.
+  CPU certification reuses the owned lossless operator and workspace, uses scaled norms,
+  and is included in Solve; no retries or changed C++ PCG stopping rule.
+  The caller-owned CPU apply output avoids an intermediate vector; the C ABI
+  retains its input copy for exact aliasing and preserves center-k state. `threads` scopes the
   calling thread's OpenMP limit per call. n and nnz are limited to 2^31-1;
   edge-index overflow still aborts. A factor handle (`apxchol_factor_*`) is
   an immutable host factorization that always keeps its values; solvers adopt
@@ -225,7 +229,7 @@ Without it, ordinary tests do not establish leak freedom. Device-wide
   level schedules of the factor `omp_sptrsv` stores on fp32 storage, from the
   shared `cuda_host.h` preparation, plus an fp32 emulation of the block
   kernels that apply them; `LevelSchedule.*` runs in every build. The
-  CUDA-free permuted-operator builder
+  Metal host permuted-operator builder
   `detail::build_permuted_full_symmetric_csr` lives in `detail/permuted_operator_host.h`; its
   general fallback orders duplicate coordinates by value bits, so its output
   does not depend on the thread team.

@@ -540,7 +540,7 @@ TEST(CApi, SingleThreadFactorAndSolutionAreByteEqualToCppSolver) {
               APXCHOL_STATUS_SUCCESS);
     EXPECT_TRUE(same_bytes(x.data(), r.x.data(), x.size()));
     EXPECT_EQ(info.iterations, r.iterations);
-    EXPECT_EQ(info.relative_residual, r.residual);
+    EXPECT_EQ(info.relative_residual, ref.relative_residual(b, r.x));
 }
 
 TEST(CApi, RepeatedSolvesAreBitIdenticalAndWarmStartAtTheSolutionIsFree) {
@@ -1618,3 +1618,133 @@ TEST(CApi, DistinctHandlesSolveConcurrently) {
         EXPECT_LT(residuals[t], 1e-8);
     }
 }
+
+TEST(CApi, CertifiesExtremeRhsAndEveryBlockColumn) {
+    const Sparse A = grid_laplacian(2, 2, 1.0);
+    auto o = defaults(); o.threads = 1;
+    handle h;
+    ASSERT_EQ(create(to_csc64(A), &o, h), APXCHOL_STATUS_SUCCESS);
+    Eigen::MatrixXd b = Eigen::MatrixXd::Ones(4, 4);
+    b.col(0) *= 1e-200;
+    b.col(1) *= 1e200;
+    b.col(2) *= 1e-320;
+    b.col(3).setZero();
+    Eigen::MatrixXd x(4, 4);
+    int64_t iterations[4]; double residuals[4]; int32_t converged[4];
+    ASSERT_EQ(apxchol_solver_solve_block(h.s, 4, b.data(), nullptr, x.data(), -1, 0,
+        iterations, residuals, converged, nullptr, 0), APXCHOL_STATUS_NOT_CONVERGED);
+    for (int c = 0; c < 4; ++c) {
+        EXPECT_EQ(residuals[c], c == 3 ? 0.0 : 1.0);
+        EXPECT_EQ(converged[c], c == 3 ? 1 : 0);
+        auto info = info_struct();
+        Eigen::VectorXd one(4);
+        const auto status = apxchol_solver_solve(h.s, b.col(c).data(), nullptr,
+            one.data(), -1, 0, &info, nullptr, 0);
+        EXPECT_EQ(status, c == 3 ? APXCHOL_STATUS_SUCCESS : APXCHOL_STATUS_NOT_CONVERGED);
+        EXPECT_EQ(info.relative_residual, residuals[c]);
+    }
+    // A normal solve used to call the underflowed tiny norm exact convergence.
+    auto info = info_struct();
+    EXPECT_EQ(apxchol_solver_solve(h.s, b.data(), nullptr, x.data(), -1, -1,
+        &info, nullptr, 0), APXCHOL_STATUS_NOT_CONVERGED);
+    EXPECT_EQ(info.relative_residual, 1.0);
+    EXPECT_EQ(info.converged, 0);
+}
+
+TEST(CApi, OriginalResidualSurvivesInputAliasing) {
+    const Sparse A = grid_laplacian(6, 6, 0.125);
+    apxchol::solve_options opts; opts.factor_opts.seed = 7;
+    apxchol::cpu_solver cpp(A, opts);
+    Eigen::VectorXd x = Eigen::VectorXd::Zero(A.rows());
+    Eigen::VectorXd b = compatible_rhs(A.rows());
+    EXPECT_EQ(cpp.relative_residual(b, x), 1.0);
+    EXPECT_EQ(cpp.relative_residual(x, x), 0.0);
+    x.setOnes();
+    const Eigen::VectorXd zero = Eigen::VectorXd::Zero(A.rows());
+    EXPECT_TRUE(std::isinf(cpp.relative_residual(zero, x)));
+    x[0] = std::numeric_limits<double>::quiet_NaN();
+    EXPECT_TRUE(std::isinf(cpp.relative_residual(b, x)));
+    auto o = defaults(); o.threads = 1;
+    handle h; ASSERT_EQ(create(to_csc64(A), &o, h), APXCHOL_STATUS_SUCCESS);
+    auto info = info_struct();
+    Eigen::VectorXd alias = b;
+    const auto status = apxchol_solver_solve(h.s, alias.data(), alias.data(), alias.data(),
+        1e-10, 200, &info, nullptr, 0);
+    const double actual = (b - A * alias).stableNorm() / b.stableNorm();
+    EXPECT_NEAR(info.relative_residual, actual, 1e-14);
+    EXPECT_EQ(status == APXCHOL_STATUS_SUCCESS, actual < 1e-10);
+}
+
+TEST(CApi, CallerOwnedApplyPreservesSameFactorArithmeticAcrossCentering) {
+#ifdef _OPENMP
+    const int old = omp_get_max_threads(); omp_set_num_threads(1);
+#endif
+    for (double shift : {0.0, 0.5}) {
+        const Sparse A = grid_laplacian(12, 12, shift);
+        apxchol::cpu_solver cpp(A);
+        const auto b = compatible_rhs(A.rows());
+        Eigen::VectorXd z(A.rows());
+        std::vector<Eigen::VectorXd> reference;
+        for (int i = 0; i < 25; ++i) reference.push_back(cpp.apply(b));
+        cpp.preconditioner().reset_apply_count();
+        for (int i = 0; i < 25; ++i) {
+#ifdef EIGEN_RUNTIME_NO_MALLOC
+            Eigen::internal::set_is_malloc_allowed(false);
+#endif
+            cpp.apply(b, z);
+#ifdef EIGEN_RUNTIME_NO_MALLOC
+            Eigen::internal::set_is_malloc_allowed(true);
+#endif
+            EXPECT_TRUE(same_bytes(z.data(), reference[i].data(), z.size()));
+        }
+        EXPECT_THROW(cpp.apply(z, z), std::invalid_argument);
+        Eigen::VectorXd short_vector(1);
+        EXPECT_THROW(cpp.apply(b, short_vector), std::invalid_argument);
+    }
+#ifdef _OPENMP
+    omp_set_num_threads(old);
+#endif
+}
+
+TEST(CApi, CertificationRetainsOriginalValuesUnderForcedFp32) {
+    const char* previous = std::getenv("APXCHOL_FP32_OPERATOR");
+    const bool had_previous = previous != nullptr;
+    const std::string saved = previous ? previous : "";
+    setenv("APXCHOL_FP32_OPERATOR", "1", 1);
+    const Sparse A = (Eigen::Matrix2d() << 3.1, -1.1, -1.1, 2.1).finished().sparseView();
+    apxchol::cpu_solver solver(A);
+    if (had_previous) setenv("APXCHOL_FP32_OPERATOR", saved.c_str(), 1);
+    else unsetenv("APXCHOL_FP32_OPERATOR");
+    const Eigen::VectorXd x = Eigen::VectorXd::Ones(2);
+    const Eigen::VectorXd b = A * x;
+    EXPECT_LT(solver.relative_residual(b, x), 1e-15);
+}
+
+TEST(CApi, BlockByteSizeOverflowIsRejectedBeforeReadingBuffers) {
+    auto o = defaults(); o.threads = 1;
+    handle h;
+    ASSERT_EQ(create(to_csc64(grid_laplacian(2, 2, 1.0)), &o, h), APXCHOL_STATUS_SUCCESS);
+    double one = 1.0;
+    EXPECT_EQ(apxchol_solver_solve_block(h.s, std::numeric_limits<int64_t>::max() / 4,
+        &one, nullptr, &one, -1, -1, nullptr, nullptr, nullptr, nullptr, 0),
+        APXCHOL_STATUS_INVALID_ARGUMENT);
+}
+
+#if defined(APXCHOL_USE_METAL)
+TEST(CApi, MetalExtremeRhsNormIsUnsupportedRatherThanFalseConvergence) {
+    if (!apxchol_backend_available(APXCHOL_BACKEND_METAL)) GTEST_SKIP();
+    auto o = defaults(); o.threads = 1; o.backend = APXCHOL_BACKEND_METAL;
+    handle h;
+    ASSERT_EQ(create(to_csc64(grid_laplacian(2, 2, 1.0)), &o, h), APXCHOL_STATUS_SUCCESS);
+    for (double scale : {1e-200, 1e200}) {
+        const Eigen::VectorXd b = Eigen::VectorXd::Constant(4, scale);
+        Eigen::VectorXd x(4);
+        auto info = info_struct();
+        EXPECT_EQ(apxchol_solver_solve(h.s, b.data(), nullptr, x.data(), -1, -1,
+            &info, nullptr, 0), APXCHOL_STATUS_UNSUPPORTED);
+        EXPECT_EQ(info.converged, 0);
+        EXPECT_EQ(apxchol_solver_solve_block(h.s, 1, b.data(), nullptr, x.data(), -1, -1,
+            nullptr, nullptr, nullptr, nullptr, 0), APXCHOL_STATUS_UNSUPPORTED);
+    }
+}
+#endif

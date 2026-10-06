@@ -39,6 +39,21 @@ _Static_assert(offsetof(apxchol_stats, setup_seconds) == 48, "apxchol_stats layo
 _Static_assert(offsetof(apxchol_stats, sddm) == 56, "apxchol_stats layout");
 _Static_assert(offsetof(apxchol_stats, setup_max_threads) == 60, "apxchol_stats layout");
 
+_Static_assert(offsetof(apxchol_options, struct_size) == 0, "options size field");
+_Static_assert(offsetof(apxchol_solve_info, struct_size) == 0, "info size field");
+_Static_assert(offsetof(apxchol_stats, struct_size) == 0, "stats size field");
+_Static_assert(APXCHOL_STATUS_SUCCESS == 0 && APXCHOL_STATUS_NOT_CONVERGED == 1 &&
+ APXCHOL_STATUS_INVALID_ARGUMENT == 2 && APXCHOL_STATUS_INVALID_OPERATOR == 3 &&
+ APXCHOL_STATUS_NO_FACTOR_VALUES == 4 && APXCHOL_STATUS_UNSUPPORTED == 5 &&
+ APXCHOL_STATUS_OUT_OF_MEMORY == 6 && APXCHOL_STATUS_INTERNAL_ERROR == 7, "status values");
+_Static_assert(APXCHOL_BACKEND_CPU == 0 && APXCHOL_BACKEND_METAL == 1, "backends");
+_Static_assert(APXCHOL_SAMPLER_GKS == 0 && APXCHOL_SAMPLER_TRACE_CYCLE == 1, "samplers");
+_Static_assert(APXCHOL_PARTITIONER_BLOCK_GREEDY == 0 &&
+ APXCHOL_PARTITIONER_PRIORITY_GREEDY == 1 && APXCHOL_PARTITIONER_BAUMANN_KYNG == 2,
+ "partitioners");
+_Static_assert(APXCHOL_STORAGE_VEC == 0 && APXCHOL_STORAGE_BSTR == 2 &&
+ APXCHOL_STORAGE_VEC_POOL_AOS == 4, "storage");
+
 /* Solves the path Laplacian with solver and checks x = (1, 0, -1). */
 static int solve_path(apxchol_solver* solver, const char* what) {
     const double b[] = {1.0, 0.0, -1.0};
