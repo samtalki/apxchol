@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <cstdint>
@@ -29,6 +30,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -375,6 +377,7 @@ struct parallel_cpu_round_result {
     apxchol::detail::gpu_round_shadow_cpu_comparison comparison;
     std::uint32_t worker_mask = 0;
     int team_width = 0;
+    bool rendezvous_timed_out = false;
 };
 
 parallel_cpu_round_result run_parallel_cpu_round(
@@ -419,6 +422,7 @@ parallel_cpu_round_result run_parallel_cpu_round(
 #endif
     std::atomic<std::uint32_t> worker_mask{0};
     std::atomic<int> team_width{0};
+    std::atomic<bool> rendezvous_timed_out{false};
     const apxchol::detail::tree_elimination tree;
     const auto recording_tree = apxchol::as_eliminator(
         [&](std::span<apxchol::weighted_neighbor> neighbors, double degree,
@@ -430,8 +434,23 @@ parallel_cpu_round_result run_parallel_cpu_round(
             const int worker = 0;
             team_width.store(1, std::memory_order_relaxed);
 #endif
-            worker_mask.fetch_or(std::uint32_t{1} << worker,
-                                 std::memory_order_relaxed);
+            const auto bit = std::uint32_t{1} << worker;
+            const auto previous = worker_mask.fetch_or(bit, std::memory_order_relaxed);
+            // Dynamic scheduling may let the first worker finish every small
+            // pivot before the second worker is scheduled. Rendezvous once per
+            // worker at the existing eliminator seam so this fixture actually
+            // exercises two producer buffers. Do not change production scheduling
+            // or weaken the participation assertion. Bound the wait so a broken
+            // team/chunk configuration fails instead of hanging the test suite.
+            if (!(previous & bit) && team_width.load(std::memory_order_relaxed) == 2) {
+                const auto deadline = std::chrono::steady_clock::now() +
+                    std::chrono::seconds(5);
+                while (std::popcount(worker_mask.load(std::memory_order_relaxed)) < 2 &&
+                       std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::yield();
+                if (std::popcount(worker_mask.load(std::memory_order_relaxed)) < 2)
+                    rendezvous_timed_out.store(true, std::memory_order_relaxed);
+            }
             tree.sample_clique(neighbors, degree, seed, out);
         });
     std::vector<apxchol::detail::factor_col> columns;
@@ -445,7 +464,8 @@ parallel_cpu_round_result run_parallel_cpu_round(
         apxchol::detail::compare_gpu_round_shadow_with_cpu(
             expected, excess_bounds, graph, columns),
         worker_mask.load(std::memory_order_relaxed),
-        team_width.load(std::memory_order_relaxed)};
+        team_width.load(std::memory_order_relaxed),
+        rendezvous_timed_out.load(std::memory_order_relaxed)};
 }
 
 apxchol::detail::gpu_round_shadow_state_fingerprint fingerprint_graph(
@@ -474,9 +494,10 @@ make_resident_provenance_graph() {
         {2, 3, 6.0}, {2, 4, 8.0}, {2, 5, 9.0},
         {3, 6, 10.0}, {4, 7, 11.0}, {5, 6, 12.0}})
         graph.add_edge(edge.u, edge.v, edge.weight);
-    // Sixteen independent degree-512 pivots ensure that the production dynamic
-    // CPU compute/apply path uses both workers. Their common neighbor set also
-    // permits relaxed endpoint-slot claims to differ from the GPU's stable
+    // Sixteen independent degree-512 pivots select the production dynamic
+    // CPU compute/apply path; run_parallel_cpu_round coordinates participation.
+    // Their common neighbor set also permits relaxed endpoint-slot claims to
+    // differ from the GPU's stable
     // pivot/emission order; an individual scheduling outcome may still match.
     for (node_index pivot = kResidentProvenanceFirstParallelPivot;
          pivot < kResidentProvenanceParallelPivotEnd; ++pivot) {
@@ -1027,6 +1048,7 @@ TEST(GpuRoundShadowReference,
         run_parallel_cpu_round(graph, input, expected, bounds);
     EXPECT_EQ(std::popcount(parallel.worker_mask), 2);
     EXPECT_EQ(parallel.team_width, 2);
+    EXPECT_FALSE(parallel.rendezvous_timed_out);
     // A parallel schedule may happen to reproduce serial encounter order.
     // Canonical equality is mandatory; order reproducibility is not promised.
     EXPECT_EQ(fingerprint_graph(graph).residual, expected.residual);
