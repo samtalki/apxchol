@@ -6,7 +6,7 @@
 
 #include "apxchol/csc_work.h"
 #include "apxchol/solver/detail/metal_host.h"
-#include "apxchol/solver/pcg_cuda_host.h"
+#include "apxchol/solver/detail/permuted_operator_host.h"
 #include "apxchol/solver/sptrsv/factor_drop.h"
 #include "apxchol/solver/sptrsv/level_schedule.h"
 #include "metal_device.h"

@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "apxchol/solver/pcg_cuda_host.h"
+#include "apxchol/solver/detail/permuted_operator_host.h"
 #include <array>
 #include <bit>
 #include <cstring>

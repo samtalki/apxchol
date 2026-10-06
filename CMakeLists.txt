@@ -287,8 +287,8 @@ unset(_apxchol_native_arch_option)
 
 # ── C ABI ────────────────────────────────────────────
 # Exception-safe C interface over cpu_solver (include/apxchol/c_api.h) for
-# non-C++ consumers. Not built with CUDA: there cpu_solver's triangular solves
-# run on the device, so its CPU backend would be mislabelled.
+# non-C++ consumers. CUDA builds remain excluded from this initial C ABI target;
+# cpu_solver itself always uses the CPU, including in CUDA builds.
 if (NOT APXCHOL_USE_CUDA)
     add_library(apxchol_c src/c_api.cpp)
     target_link_libraries(apxchol_c PUBLIC apxchol_core)
